@@ -1,0 +1,1076 @@
+---
+title: "Capstone"
+author: "Virginia Carneiro"
+date: "December 22nd, 2020"
+output:
+ pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+header-includes:
+  - \usepackage{float}
+  - \usepackage{booktabs}
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+# INTRODUCTORY
+## OVERVIEW
+
+THIS PROJECT WILL FOCUS TO GENERATE A MOVIE RECOMMENDATION SYSTEM USING THE *MOVIELENS-10M* DATASET. 
+
+THE MODEL WILL PREDICT THE RATING THAT A USER WILL GIVE TO A MOVIE.
+
+I WILL CREATE MY OWN RECOMMENDATION SYSTEM USING THE TOOLS LEARNING DURING THE 8 COURSES INCLUDED IN THE "DATA SCIENCE PROFESSIONAL CERTIFICATE" AND, ALSO OTHER RESOURCES I WILL INCLUDING IN THE RESOURCES SECTION.
+
+TO GENERATE THE TRAIN AND VALIDATION DATASETS I WILL TAKE THE CODE PROVIDED BY HARVARD STAFF.
+
+AFTER THAT, I WILL MAKE SOME VALIDATIONS BETWEEN THEM AND VERIFY THE DATASETS ARE CONSISTENT. 
+
+THEN, I WILL WORK WITH FEATURE ENGINEERING AND TARGET ENCODING TOOLS TO DEVELOP MY RECOMMENDATION SYSTEM ALGORITHMS.
+
+FINALLY, I WILL CHOOSE THE BEST RECOMMENDATION SYSTEM ALGORITHMS ACCORDING TO THE SMALLEST RMSE VALUE. 
+
+INTO THE MOVIELENS PROJECT WILL BE THREE FILES: 
+
+1. MY REPORT IN PDF FORMAT.
+2. A REPORT IN RMD FORMAT.
+3. A SCRIPT IN R FORMAT THAT GENERATES YOUR PREDICTED MOVIE RATINGS AND RMSE SCORE.
+
+```{r include = FALSE}
+################################################################
+### Create edx set, validation set (final hold-out test set) 
+################################################################
+
+# Install and Loading libraries
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(datetime)) install.packages("datetime", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(xgboost)) install.packages("xgboost", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+library(datetime)
+library(lubridate)
+library(ggplot2)
+library(xgboost)
+
+# Download dataset MovieLens 10M
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+# if using R 4.0 or later:
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+# MOVIELENS DATASET
+## DATA VALIDATION
+
+AFTER RUNNING THE SCRIPT PROVIDED BY HARVARD STAFF, I GOT TWO DATASETS WITH THE FOLLOW STRUCTURES:
+
+### EDX DATASET
+```{r, echo=TRUE}
+head(edx)
+```
+### VALIDATION DATASET
+```{r, echo=TRUE}
+head(validation)
+```
+TO MAKE THE REPORT EASY TO READ I WILL SHOW JUST THE ANALYSIS FOR *EDX DATASET*, BUT THE SAME VALIDATION WILL BE AVARIABLE ON R SCRIPT FOR VALIDATION DATASET AS WELL.
+
+* THERE ARE NOT *NA* VALUES IN THE DATASET.
+```{r, echo=TRUE}
+sum(is.na(edx))
+```
+* THERE ARE 69878 DIFFERENT USERID.
+```{r, echo=TRUE}
+edx_users <- edx %>% 
+  select(userId) %>%
+  distinct() 
+str(edx_users)
+```
+* THERE ARE 10677 DIFFERENT MOVIEID. 
+```{r, echo=TRUE}
+edx_movieId <- edx %>% 
+  select(movieId) %>%
+  distinct() 
+str(edx_movieId)
+```
+* THERE ARE 10676 DIFFERENT TITLES.  THAT MEANS THERE IS A DUPLICATE TITLE. IT HAS DIFFERENT MOVIEID AND GENRES. I’M NOT GOING TO REMOVE THEM BECAUSE ONE GENRES INCLUDE THE OTHER ONE.
+```{r, echo=TRUE}
+edx_movieId_title <- edx %>% 
+  select(movieId,title) %>% 
+  distinct() 
+str(edx_movieId_title)
+
+which(duplicated(edx_movieId_title$title))
+
+edx_movieId_title[6538]
+
+edx %>% select(movieId,title,genres) %>%
+  filter(title == "War of the Worlds (2005)") %>%
+  group_by (movieId,title,genres) %>%
+  distinct(n())
+```
+* THERE ARE 10 DIFFERENT RATINGS.  IT GOES FROM 0.5 TO 5 AND INCREASES BY 0.5.
+```{r, echo=TRUE}
+edx_rating <- edx %>% 
+  select(rating) %>%
+  distinct()
+str(edx_rating)
+```
+* THERE ARE 797 DIFFERENT GENRES. THERE ARE 7 OBS. AS "(NO GENRES LISTED)".  I WILL REMOVE THEM BECAUSE THIS IS NOT A CORRECT CLASSIFICATION.
+```{r, echo=TRUE}
+edx %>% filter(genres == "(no genres listed)")
+```
+
+```{r include = FALSE}
+edx <- edx %>%filter(genres != "(no genres listed)")
+```
+
+## DATA VISUALIZATION 
+
+BEFORE THE BELOW PLOTS, I’LL APPLY SOME FEATURES ENGINEERING FOR BETTER VISUALIZATION.  THESE FEATURES WILL BE APPLIED IN EDX AND VALIDATION DATASETS TO KEEP THE CONSISTENCIES.
+
+* ADD COLUMNS FOR EACH GENRES FROM GENRES COLUMN.
+* ADD A COLUMN FOR THE MOVIE YEAR FROM THE TITLE COLUMN.
+* ADD YEAR, MONTH AND DAY OF RATED FROM TIMESTAMP.
+* REMOVE TITLE, TIMESTAMP AND GENRES COLUMNS.
+* ADD DIF_RATE_MOVIE (YEAR_RATED - YEAR_MOVIE).
+
+```{r include = FALSE}
+# Knowing how many different genres has edx
+edxgenres <- edx %>% 
+  select(genres) %>%
+  distinct()
+
+# One-hot encoding - Split the genres by columns
+edxgenres <- separate(data=edxgenres,col=genres,into = c("a","b","c","d","e","f","g","h"), sep="\\|")
+edxgenres <- stack(edxgenres)
+edxgenres <- edxgenres %>% 
+  select(values) %>%
+  distinct()
+edxgenres <- edxgenres %>% drop_na()
+
+# Columns generation
+for (x in edxgenres$values) {
+  new_column <- grepl(x, edx$genres, fixed=TRUE)
+  edx$new_column <- as.numeric(new_column)
+  colnames(edx)[ncol(edx)] <- str_replace(x, "-", "_") 
+}
+
+# Columns generation (give a value according genres)
+counter <- 0
+column <- NULL
+
+for (x in edxgenres$values) {
+  
+  new_column <- grepl(x, edx$genres, fixed=TRUE)
+  if (is.null(column)) {
+    column <- as.numeric(new_column) * (2^counter)
+  }
+  else {
+    column <- column + as.numeric(new_column) * (2^counter)
+  }
+  
+  counter <- counter + 1
+}
+edx$genres = column
+
+# Extract year from title
+edx$year_movie <- as.numeric(str_extract(edx$title, regex("(?<=\\()\\d{4}(?=\\))")))
+
+edx_title_year_distinct <- edx %>% 
+  select(title,year_movie)%>% 
+  arrange(title)%>%
+  distinct()
+
+# Remove column tittle
+edx <- edx[,!("title")]
+
+# Years
+edx_years<- edx %>% 
+  select(year_movie) %>% 
+  group_by(year_movie) %>% 
+  distinct()
+
+# Extract Year/Month/day Rated
+edx <- edx %>% mutate(timestamp = as.date(timestamp))
+edx <- edx %>% mutate(year_rated = as.numeric(format(edx$timestamp, "%Y")))
+edx <- edx %>% mutate(month_rated = as.numeric(format(edx$timestamp, "%m")))
+edx <- edx %>% mutate(day_rated = as.numeric(format(edx$timestamp, "%d")))
+
+# Remove timestamp
+edx <- edx[,!("timestamp")]
+
+# Add new difference between year_rated - year_movie
+edx <- edx %>% mutate(dif_rated_movie = year_rated - year_movie)
+
+# Finding missing values 
+sum(is.na(edx))
+
+str(edx)
+
+##########################################################
+# Feature Engineering - Validation dataset
+##########################################################
+
+head(validation)
+
+# Knowing how many different genres has edx
+validationgenres <- validation %>% 
+  select(genres) %>%
+  distinct() 
+
+# One-hot encoding
+validationgenres <- separate(data=validationgenres,col=genres,into = c("a","b","c","d","e","f","g","h"), sep="\\|")
+validationgenres <- stack(validationgenres)
+validationgenres <- validationgenres %>% 
+  select(values) %>%
+  distinct()
+validationgenres <- validationgenres %>% drop_na()
+
+# Columns generation
+for (x in validationgenres$values) {
+  new_column <- grepl(x, validation$genres, fixed=TRUE)
+  validation$new_column <- as.numeric(new_column)
+  colnames(validation)[ncol(validation)] <- str_replace(x, "-", "_")
+}
+
+# Columns generation (give a value acording genres)
+counter <- 0
+column <- NULL
+
+for (x in edxgenres$values) {
+  new_column <- grepl(x, validation$genres, fixed=TRUE)
+  
+  if (is.null(column)) {
+    column <- as.numeric(new_column) * (2^counter)
+    head(column)
+  }
+  else {
+    column <- column + as.numeric(new_column) * (2^counter)
+  }
+  counter <- counter + 1
+}
+
+validation$genres = column
+
+# Extract year from title
+validation$year_movie <- as.numeric(str_extract(validation$title, regex("(?<=\\()\\d{4}(?=\\))")))
+
+validation_title_year_distinct <- validation %>% 
+  select(title,year_movie)%>% 
+  arrange(title)%>%
+  distinct()
+
+# Remove column tittle
+validation <- validation[,!("title")]
+
+# Years
+validation_years<- validation %>% 
+  select(year_movie) %>% 
+  group_by(year_movie) %>% 
+  distinct()
+
+# Extract Year/Month/day Rated
+validation <- validation %>% mutate(timestamp = as.date(timestamp))
+validation <- validation %>% mutate(year_rated = as.numeric(format(validation$timestamp, "%Y")))
+validation <- validation %>% mutate(month_rated = as.numeric(format(validation$timestamp, "%m")))
+validation <- validation %>% mutate(day_rated = as.numeric(format(validation$timestamp, "%d")))
+
+# Remove timestamp
+validation <- validation[,!("timestamp")]
+
+# Add new difference between year_rated - year_movie
+validation <- validation %>% mutate(dif_rated_movie = year_rated - year_movie)
+
+# Finding missing values 
+sum(is.na(validation))
+```
+### EDX RATINGS BY USERS 
+```{r include = FALSE}
+edx_rating_users <- edx %>% 
+  select(userId, movieId) %>% 
+  group_by(userId) %>%
+  summarize(qty = n()) 
+```
+
+```{r, echo=TRUE, fig.width = 5.5, fig.height = 4, fig.align = "center"}
+edx_rating_users %>% 
+  ggplot(aes(x = userId, y = qty)) + 
+  geom_point(color= '#f895c4')+ 
+  labs(title = "Edx - Ratings by Users",
+       x = "Users",
+       y = "Quantity of Movies")+
+  theme_bw() +
+  theme(axis.text.x = element_text(colour = "grey20", size = 8, angle = 90, hjust = 0.5, 
+                                   vjust = 0.5),
+        axis.text.y = element_text(colour = "grey20", size = 8),
+        strip.text = element_text(face = "italic"),
+        text = element_text(size = 10))
+```
+* THE MAJORITY OF THE USERS RATED LESS THAN 1000 MOVIES. 
+* WE CAN OBSERVE THAT THERE ARE SOME OUTLIERS AT THE TOP OF THE PLOT.
+
+### EDX YEAR RATED VS YEAR RELEASE
+```{r include = FALSE}
+edx_movie_release_rated <- edx %>% select(userId, movieId, year_movie, year_rated) %>%
+  summarize(difference = year_rated - year_movie) %>%
+  group_by (difference) %>%
+  summarize(Qty = n()) %>%
+  arrange(Qty)
+```
+
+```{r, echo=TRUE,fig.width = 5.5, fig.height = 4, fig.align = "center"}
+ggplot(data = edx_movie_release_rated, aes(x = difference, y = Qty)) +
+  geom_bar(stat = "identity", color= '#f895c4', fill = '#f895c4') +
+  labs(title = "Edx - Difference Between Years Rated and Years Release",
+       x = "Difference in Years (rated - premier)",
+       y = "Quantity of Movies") +
+  theme_bw() +
+  theme(axis.text.x = element_text(colour = "grey20", size = 8, angle = 90, hjust = 0.5, 
+                                   vjust = 0.5),
+        axis.text.y = element_text(colour = "grey20", size = 8),
+        strip.text = element_text(face = "italic"),
+        text = element_text(size = 10))
+```
+* THE MAJORITY OF THE MOVIES HAVE BEEN RATED A YEAR AFTER THE PREMIER.
+* THERE ARE A FEW MOVIES HAVE BEEN RATED BEFORE THE PREMIER.  THESE ONES CAN BE CONSIDERED AS OUTLIERS. 
+
+### EDX RELEASE MOVIES BY YEAR
+```{r include = FALSE}
+edx_movies_year_movie <- edx %>% 
+  select(movieId, year_movie) %>% 
+  group_by(year_movie) %>%
+  distinct() %>%
+  summarize(qty = n())
+```
+
+```{r, echo=TRUE,fig.width = 5.5, fig.height = 4, fig.align = "center"}
+edx_movies_year_movie %>% 
+  ggplot(aes(x = year_movie, y = qty)) + 
+  geom_point(color= '#f895c4')+ 
+  scale_y_continuous(breaks = c(0, 50, 150, 200, 250, 300, 350, 400, 450))+
+  labs(title = "Edx - Release Movies by Year",
+       x = "Years",
+       y = "Quantity of Movies")+
+  theme_bw() +
+  theme(axis.text.x = element_text(colour = "grey20", size = 8, angle = 90, hjust = 0.5, 
+                                   vjust = 0.5),
+        axis.text.y = element_text(colour = "grey20", size = 8),
+        strip.text = element_text(face = "italic"),
+        text = element_text(size = 10))
+```
+* WE HAVE FEW MOVIES RELEASED BETWEEN 1915 AND 1930.
+* STARTING IN 1931, THE PREMIERES OF THE FILMS GREW PROGRESSIVELY UNTIL 1979.
+* BEGAN IN 1980, WE CAN OBSERVED A PRONOUNCED GROWTH UNTIL REACHING THE MAXIMUM GROWTH PEAK BETWEEN 1996 TO 2003.
+* AFTER 2004 MOVIE PREMIERES BEGAN TO DECLINE BUT NOT TOO MUCH.
+
+### EDX MOVIES BY GENRES 
+```{r include = FALSE}
+edx_movies_genres <- edx %>% 
+  select(movieId,Comedy,Action,Adventure,Animation,Drama,Crime,Sci_Fi,
+         Horror,Thriller,Film_Noir,Mystery,Western,Documentary,Romance,Fantasy,
+         Musical,War,Children,IMAX) %>%
+  distinct()
+
+edx_movies_genres_colSums <- data.frame(Qty=colSums(edx_movies_genres[,-1])) %>% arrange(desc(Qty))
+```
+
+```{r, echo=TRUE,fig.width = 5.5, fig.height = 4, fig.align = "center"}
+ggplot(data = edx_movies_genres_colSums, aes(x = rownames(edx_movies_genres_colSums),
+                                             y = Qty)) +
+  geom_bar(stat = "identity", color= '#f895c4', fill = '#f895c4') +
+  scale_y_continuous(breaks = c(0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 
+                                4500, 5000, 5500))+
+  labs(title = "Edx - Movies by Genres",
+       x = "Genres",
+       y = "Quantity of Movies") +
+  theme_bw() +
+  theme(axis.text.x = element_text(colour = "grey20", size = 8, angle = 90, hjust = 0.5, 
+                                   vjust = 0.5),
+        axis.text.y = element_text(colour = "grey20", size = 8),
+        strip.text = element_text(face = "italic"),
+        text = element_text(size = 10))
+```
+* THE TOP MOVIES BY GENRES RATED WERE DRAMA, COMEDY, THRILLER AND, ROMANCE.
+
+# MOVIE RECOMMENDATION SYSTEM
+
+THE RECOMMENDATION SYSTEM WILL BE EVALUATED ACCORDING TO THE RMSE METRIC.
+
+THE RMSE() FUNCTION AVAILABLE IN THE PACKAGE IN R IS USED TO CALCULATE ROOT MEAN SQUARE ERROR BETWEEN ACTUAL VALUES AND PREDICTED VALUES.
+THE LOWER VALUES OF RMSE INDICATE A BETTER FIT. RMSE IS A GOOD MEASURE OF HOW ACCURATELY THE MODEL PREDICTS THE RESPONSE, AND IT IS THE MOST IMPORTANT CRITERION FOR FIT IF THE MAIN PURPOSE OF THE MODEL IS PREDICTION.
+
+I TRIED WITH DIFFERENT ALGORITHMS SUCH AS LINEAR REGRESSION, LOGISTIC REGRESSION, REGRESSION TREE AND RANDOM FOREST.
+
+DUE TO THE HARDWARE LIMITATION OF MY COMPUTER, I COULDN'T OPTIMIZE THESE ALGORITHMS TO REACH AN ACCEPTABLE RMSE. BUT THE STUDY OF DECISION TREES FOR MACHINE LEARNING CAUGHT MY INTEREST.  
+
+FOR THAT REASON I PUT HIGHER EMPHASIS ON THE RF MODEL, BUT I HAVE NOT ACHIEVED AN ACEPTABLE RMSE.
+
+BECAUSE THESE LIMITATIONS, I STARTED LOOKING FOR DIFFERENT OPTIONS AND I FOUND A LIBRARY IN R CALLED XGBOOST (EXTREME GRADIENT BOOSTING) WHICH IS POPULAR FOR KAGGLE COMPETITIONS. IT IS AN OPEN-SOURCE IMPLEMENTATION OF GRADIENT BOOSTED TREES ALGORITHM AND IT IS DESIGNED FOR SPEED AND PERFORMANCE.
+
+RF AND XGBOOST ARE SETS OF DECISION TREES, BUT THEY HAVE SOME DIFFERENCES:
+
+1. BUILDING TREES: 
+    * RF: INDEPENDENT TREES
+    * GRADIENT BOOSTING: ONE TREE AT A TIME(FORWARD STAGE-WISE MANNER)
+2. COMBINING RESULTS:
+    * RF: END OF THE PROCESS
+    * GRADIENT BOOSTING: AT THE BEGINNING
+3. TUNING:
+    * RF: MEDIUM
+    * GRADIENT BOOSTING: HARD (BETTER PERFORMANCE)
+    
+## ABOUT XGBOOST 
+
+XGBOOST IS USED FOR SUPERVISED LEARNING PROBLEMS, WHERE WE USE THE TRAINING DATA (WITH MULTIPLE FEATURES) $x_i$ TO PREDICT A TARGET VARIABLE $y_i$. 
+XGBOOST CAN BE USED TO SOLVE REGRESSION, CLASSIFICATION, RANKING, AND USER-DEFINED PREDICTION PROBLEMS. FOR MY RECOMMENDATION SYSTEM I’M USING REGRESSION.
+
+XGBOOST IS A PERFECT COMBINATION OF SOFTWARE AND HARDWARE OPTIMIZATION TECHNIQUES TO YIELD SUPERIOR RESULTS USING LESS COMPUTING RESOURCES IN THE SHORTEST AMOUNT OF TIME.
+
+## WHY I CHOSE XGBOOST
+
+BELOW ARE THE PRINCIPAL FEATURES OF THE MODEL (FOR MORE DETAILS SEE THE RESOURCES SECTION).
+
+### SYSTEM FEATURES
+
+* PARALLELIZATION OF TREE CONSTRUCTION USING ALL OF YOUR CPU CORES DURING TRAINING.
+* DISTRIBUTED COMPUTING FOR TRAINING VERY LARGE MODELS USING A CLUSTER OF MACHINES.
+* OUT-OF-CORE COMPUTING FOR VERY LARGE DATASETS THAT DON’T FIT INTO MEMORY.
+* CACHE OPTIMIZATION OF DATA STRUCTURES AND ALGORITHM TO MAKE BEST USE OF HARDWARE.
+
+### ALGORITHM FEATURES
+THE ALGORITHM WAS ENGINEERED FOR THE EFFICIENCY OF COMPUTE TIME AND MEMORY RESOURCES. THE ALGORITHM FEATURES INCLUDE:
+
+* SPARSE AWARE IMPLEMENTATION WITH AUTOMATIC HANDLING OF MISSING DATA VALUES.
+* BLOCK STRUCTURE TO SUPPORT THE PARALLELIZATION OF TREE CONSTRUCTION.
+* CONTINUED TRAINING SO THAT YOU CAN FURTHER BOOST AN ALREADY FITTED MODEL ON NEW DATA.
+
+### XGBOOST PARAMETERS:
+TO KEEP THE MODEL SIMPLE, I WILL SHOW THE IMPROVEMENT OF THE MODEL THROUGH THE SETTING OF THESE PARAMETERS.  THERE ARE A LOT OF PARAMETERS TO SET, BUT I’M GOING TO MENTION THE ONES THAT I’M USING FOR MY RECOMMENDATION SYSTEM.
+
+* NROUNDS = MAXIMUM ROUND QUANTITY.
+* VERBOSE = SHOW THE OPTIMIZATION PROGRESS.
+* EARLY_STOPPING_ROUNDS = STOP TRAINING AFTER x ROUNDS WITHOUT ANY IMPROVEMENT.
+* WATCHLIST = TRAIN / TEST PAIR TO CHECK.
+* EVAL_METRIC = METRIC TO EVALUATE (RMSE).
+* MAX_DEPTH (6 DEFAULT) = MAXIMUM DEPTH OF A TREE.  USED TO CONTROL OVERFITTING.
+* ETA (0.3 DEFAULT) = LEARNING RATE .  IT IS SIZE OF THE SHRINKAGE USED TO PREVENT OVERFITTING.
+* MIN_CHILD_WEIGHT (DEFAULT=1) =  THE MINIMUM SUM OF INSTANCE WEIGHT (HESSIAN) NEEDED IN A CHILD.  THE LARGE IT IS, THE MORE CONSERVATIVE THE ALGORITHM WILL BE.  THIS IS TO IMPROVE OVERFITTING.
+* TREE_METHOD (DEFAULT = auto) = IT IS THE TREE CONSTRUCTION ALGORITHM. I CHOSE **HIST** BECAUSE IT IS FASTER THAN THE APPROX TREE METHOD (WHICH IS SELECTED IF I DONT MENTION THE TREE METHOD) WITH THE SAME RESULTS. 
+
+# THE RECOMMENDATION SYSTEM
+
+FROM THIS POINT ON I AM GOING TO SHOW THE DIFFERENT CONFIGURATIONS THAT I DID TO ACHIEVE AN ACCEPTABLE RMSE.
+	
+I SPLIT THE EDX DATASET INTO TWO DATASETS.  ONE FOR TRAINING AND ANOTHER ONE FOR TEST (20%).
+	
+I WILL USE THE VALIDATION DATASET WHEN I GET AN ACCEPTABLE RMSE ON TEST DATASET.
+
+THERE IS A WAY TO FIND THE BEST TUNING WITH XGBOOST, BUT IT WILL TAKE MORE THAN 2 WEEKS TO RUN ON MY COMPUTER.  THIS IS WHY I COULDN’T APPLY IT TO MAKE IT EASY.
+
+THE PARAMETERS TO TUNING ARE:
+
+* NROUNDS (100, 200 ROUNDS).
+* MAX_DEPTH (10, 15, 20, 25).
+* COLSAMPLE_BYTREE (SUBSAMPLING OF COLUMNS WITH 0.5, 0.6, 0.7, 0.8, 0.9).
+* ETA (0.1).
+
+# PREPARE DATASET TO RUN XGBOOST
+
+* TO GIVE THE ALGORITHM MORE FLEXIBILITY FOR OPTIMIZATION PROPOSE. I'M GOING TO APPLY TARGET ENCODING AROUND OUR TARGET VARIABLE **RATING**. 
+* TARGET ENCODING ONLY APPLIED FOR TRAINING PURPOSE.
+
+
+```{r include = FALSE}
+################################################################
+### Edx - Prepare dataset to run XGBooost
+################################################################
+
+# Clean genres columns with 0 and 1 values.  
+edx <- edx[,-c("Comedy","Action","Adventure","Animation","Drama","Crime","Sci_Fi",
+               "Horror","Thriller","Film_Noir","Mystery","Western","Documentary","Romance","Fantasy",
+               "Musical","War","Children","IMAX")]
+
+validation <- validation[,-c("Comedy","Action","Adventure","Animation","Drama","Crime","Sci_Fi",
+               "Horror","Thriller","Film_Noir","Mystery","Western","Documentary","Romance","Fantasy",
+               "Musical","War","Children","IMAX")]
+
+# Function to calculate mode
+getmode <- function(v) {
+  val <- unique(v)
+  val[which.max(tabulate(match(v, val)))]
+}
+
+# Target Encoding by User (TRAIN)
+enc <- edx[,c("userId","rating")] %>%
+  group_by(userId) %>% 
+  summarise(
+    userId_sd=sd(rating),
+    userId_mean=mean(rating),
+    userId_median=median(rating),
+    userId_mode=getmode(rating),
+  )
+
+edx <- left_join(edx,enc)
+
+# Target Encoding by User (VALIDATION)
+validation <- left_join(validation,enc)
+
+# Target Encoding by Movie (TRAIN)
+enc <- edx[,c("movieId","rating")] %>%
+  group_by(movieId) %>% 
+  summarise(
+    movieId_sd=sd(rating),
+    movieId_mean=mean(rating),
+    movieId_median=median(rating),
+    movieId_mode=getmode(rating),
+  )
+
+edx <- left_join(edx,enc)
+
+# Target Encoding by Movie (VALIDATION)
+validation <- left_join(validation,enc)
+
+# Target Encoding by Movie Year (TRAIN)
+enc <- edx[,c("year_movie","rating")] %>%
+  group_by(year_movie) %>% 
+  summarise(
+    year_movie_sd=sd(rating),
+    year_movie_mean=mean(rating),
+    year_movie_median=median(rating),
+    year_movie_mode=getmode(rating),
+  )
+
+edx <- left_join(edx,enc)
+
+# Target Encoding by Movie Year (VALIDATION)
+validation <- left_join(validation,enc)
+
+# Target Encoding by Year Rated (TRAIN)
+enc <- edx[,c("year_rated","rating")] %>%
+  group_by(year_rated) %>% 
+  summarise(
+    year_rated_sd=sd(rating),
+    year_rated_mean=mean(rating),
+    year_rated_median=median(rating),
+    year_rated_mode=getmode(rating),
+  )
+
+edx <- left_join(edx,enc)
+
+# Target Encoding by Year Rated (VALIDATION)
+validation <- left_join(validation,enc)
+
+# Target Encoding by Month Rated (TRAIN)
+enc <- edx[,c("month_rated","rating")] %>%
+  group_by(month_rated) %>% 
+  summarise(
+    month_rated_sd=sd(rating),
+    month_rated_mean=mean(rating),
+    month_rated_median=median(rating),
+    month_rated_mode=getmode(rating),
+  )
+
+edx <- left_join(edx,enc)
+
+# Target Encoding by Month Rated (VALIDATION)
+validation <- left_join(validation,enc)
+
+# Target Encoding by Day Rated (TRAIN)
+enc <- edx[,c("day_rated","rating")] %>%
+  group_by(day_rated) %>% 
+  summarise(
+    day_rated_sd=sd(rating),
+    day_rated_mean=mean(rating),
+    day_rated_median=median(rating),
+    day_rated_mode=getmode(rating),
+  )
+
+edx <- left_join(edx,enc)
+
+# Target Encoding by Day Rated (VALIDATION)
+validation <- left_join(validation,enc)
+
+# Target Encoding by UserId, year_rated (TRAIN)
+enc <- edx[,c("userId","year_rated","rating")] %>%
+  group_by(userId, year_rated) %>% 
+  summarise(
+    userId_year_rated_sd=sd(rating),
+    userId_year_rated_mean=mean(rating),
+    userId_year_rated_median=median(rating),
+    userId_year_rated_mode=getmode(rating),
+  )
+
+edx <- left_join(edx,enc)
+
+# Target Encoding by UserId, year_movie (VALIDATION)
+validation <- left_join(validation,enc)
+
+# Target Encoding by UserId, month_rated (TRAIN)
+enc <- edx[,c("userId","month_rated","rating")] %>%
+  group_by(userId, month_rated) %>% 
+  summarise(
+    userId_month_rated_sd=sd(rating),
+    userId_month_rated_mean=mean(rating),
+    userId_month_rated_median=median(rating),
+    userId_month_rated_mode=getmode(rating),
+  )
+
+edx <- left_join(edx,enc)
+
+# Target Encoding by UserId, year_movie (VALIDATION)
+validation <- left_join(validation,enc)
+
+# Target Encoding by UserId, day_rated (TRAIN)
+enc <- edx[,c("userId","day_rated","rating")] %>%
+  group_by(userId, day_rated) %>% 
+  summarise(
+    userId_day_rated_sd=sd(rating),
+    userId_day_rated_mean=mean(rating),
+    userId_day_rated_median=median(rating),
+    userId_day_rated_mode=getmode(rating),
+  )
+
+edx <- left_join(edx,enc)
+
+# Target Encoding by UserId, year_movie (VALIDATION)
+validation <- left_join(validation,enc)
+
+# Target Encoding by movieId, year_movie (TRAIN)
+enc <- edx[,c("movieId","year_movie","rating")] %>%
+  group_by(movieId, year_movie) %>% 
+  summarise(
+    movieId_year_movie_sd=sd(rating),
+    movieId_year_movie_mean=mean(rating),
+    movieId_year_movie_median=median(rating),
+    movieId_year_movie_mode=getmode(rating),
+  )
+
+edx <- left_join(edx,enc)
+
+# Target Encoding by movieId, year_movie (VALIDATION)
+validation <- left_join(validation,enc)
+
+# Check NA in Train
+print("------ TRAIN ------")
+as.table(sapply(edx, function(y) sum(length(which(is.na(y))))))
+
+# Check NA in Validation
+print("------ VALIDATION ------")
+as.table(sapply(validation, function(y) sum(length(which(is.na(y))))))
+
+# Assign zero to NA (TRAIN)
+edx[is.na(edx)] <- 0
+
+# Assign zero to NA (VALIDATION)
+validation[is.na(validation)] <- 0
+
+# Free memory
+enc=NULL
+gc()
+```
+
+```{r include = FALSE}
+##########################################################
+# Edx - Create Train and Test dataset
+##########################################################
+
+# Create training and test sets from edx dataset.
+set.seed(1, sample.kind="Rounding") 
+test_index <- createDataPartition(y = edx$rating, times = 1, p = 0.2, 
+                                  list = FALSE)
+train_edx <- edx[-test_index,]
+test_edx <- edx[test_index,]
+```
+
+```{r include = FALSE}
+
+# Free memory
+edx = NULL
+gc()
+```
+
+## TRAIN DATASET STRUCTURE
+```{r, echo=TRUE}
+str(train_edx)
+```
+
+## TEST DATASET STRUCTURE
+```{r, echo=TRUE}
+str(test_edx)
+```
+
+# XGBOOST MODELS
+
+## MODEL 1 - DEFAULT VALUES
+IT WILL BE CREATED WITH THE DEFAULT VALUES. THIS IS THE *BASELINE MODEL*.
+
+* max_depth = 6 (default)
+* eta = 0.3 (default)
+* min_child_weight = 1 (default)
+
+```{r, echo=TRUE}
+
+set.seed(1, sample.kind = "Rounding")
+
+y <- train_edx$rating
+x <- data.matrix(train_edx[,!("rating")])
+d_train <- xgb.DMatrix(data = x, label = y)
+
+y <- test_edx$rating
+x <- data.matrix(test_edx[,!("rating")])
+d_test <- xgb.DMatrix(data = x, label = y)
+```
+
+```{r include = FALSE}
+y <- NULL
+x <- NULL
+gc()
+```
+
+```{r, echo=TRUE}
+
+watchlist <- list(train = d_train, eval = d_test)
+
+fit <- xgb.train(data=d_train,
+                 nrounds = 5000,
+                 verbose = FALSE, 
+                 tree_method = 'hist',
+                 early_stopping_rounds = 20, 
+                 watchlist = watchlist,
+                 eval_metric = 'rmse')
+
+y <- test_edx$rating
+x <- data.matrix(test_edx[,!("rating")])
+
+yhat = predict(fit, x)
+RMSE_model_I <- RMSE(y, yhat)
+
+```
+
+```{r table1, echo=FALSE}
+rmse_table <- data_frame(Method = "BASELINE - TEST", RMSE = RMSE_model_I)
+rmse_table %>% knitr::kable(caption = "RMSEs")
+```  
+
+## MODEL 2 - MAX TREE DEPTH = 8
+IN THIS MODEL I'M CHANGING THE TREE DEPTH FROM 6 TO 8.  WILLING AN IMPROVEMENT IN THE RMSE.
+
+* max_depth = 8
+* eta = 0.3 (default)
+* min_child_weight = 1 (default)
+
+```{r, echo=TRUE}
+
+set.seed(1, sample.kind="Rounding")
+
+y <- train_edx$rating
+x <- data.matrix(train_edx[,!("rating")])
+d_train <- xgb.DMatrix(data = x, label = y)
+
+y <- test_edx$rating
+x <- data.matrix(test_edx[,!("rating")])
+d_test <- xgb.DMatrix(data = x, label = y)
+```
+
+```{r include = FALSE}
+y <- NULL
+x <- NULL
+gc()
+```
+
+```{r, echo=TRUE}
+
+watchlist <- list(train = d_train, eval = d_test)
+
+fit <- xgb.train(data=d_train, 
+                 nrounds = 5000,
+                 verbose = FALSE, 
+                 tree_method ='hist',
+                 max_depth = 8,
+                 early_stopping_rounds = 20, 
+                 watchlist = watchlist,
+                 eval_metric = 'rmse')
+
+y <- test_edx$rating
+x <- data.matrix(test_edx[,!("rating")])
+
+yhat = predict(fit, x)
+RMSE_model_II <- RMSE(y, yhat)
+```
+
+```{r table2, echo=FALSE}
+rmse_table <- rbind(rmse_table, data_frame(Method = "MAX TREE DEPTH = 8 - TEST", RMSE = RMSE_model_II))
+rmse_table %>% knitr::kable(caption = "RMSEs")
+```
+
+
+## MODEL 3 - MAX TREE DEPTH = 10
+BECAUSE THERE WAS AN IMPROVEMENT IN MODEL 2, I'M INCREASING THE TREE DEPTH FROM 8 TO 10.
+
+* max_depth = 10
+* eta = 0.3 (DEFAULT)
+* min_child_weight = 1 (default)
+
+```{r, echo=TRUE}
+
+set.seed(1, sample.kind="Rounding")
+
+y <- train_edx$rating
+x <- data.matrix(train_edx[,!("rating")])
+d_train <- xgb.DMatrix(data = x, label = y)
+
+y <- test_edx$rating
+x <- data.matrix(test_edx[,!("rating")])
+d_test <- xgb.DMatrix(data = x, label = y)
+```
+
+```{r include = FALSE}
+y <- NULL
+x <- NULL
+gc()
+```
+
+```{r, echo=TRUE}
+
+watchlist <- list(train = d_train, eval = d_test)
+
+fit <- xgb.train(data=d_train, 
+                 nrounds = 5000,
+                 verbose = FALSE,
+                 tree_method = 'hist',
+                 max_depth = 10,
+                 early_stopping_rounds = 20,  
+                 watchlist = watchlist,
+                 eval_metric = 'rmse')
+
+y <- test_edx$rating
+x <- data.matrix(test_edx[,!("rating")])
+
+yhat = predict(fit, x)
+RMSE_model_III <- RMSE(y, yhat)
+```
+
+```{r table3, echo=FALSE}
+rmse_table <- rbind(rmse_table, data_frame(Method = "MAX TREE DEPTH = 10 - TEST", RMSE = RMSE_model_III))
+rmse_table %>% knitr::kable(caption = "RMSEs")
+```
+
+THERE WAS NOT IMPROVEMENT IN THIS MODEL CHANGING THE TREE DEPTH TO 10.  THEN, FOR THE REST OF THE MODELS I'M KEEPING THE TREE DEPTH = 8 AS THE MOST OPTIMAL.
+
+## MODEL 4 - MAX TREE DEPTH = 8 AND MIN CHILD WEIGHT = 300
+IN THIS MODEL I'M CHANGING THE CHILD WEIGHT FROM THE DEFAUL 1 TO 300.  WILLING AN IMPROVEMENT IN THE RMSE.
+
+* max_depth = 8
+* eta = 0.3 (DEFAULT)
+* min_child_weight = 300
+
+```{r, echo=TRUE}
+
+set.seed(1, sample.kind="Rounding")
+
+y <- train_edx$rating
+x <- data.matrix(train_edx[,!("rating")])
+d_train <- xgb.DMatrix(data = x, label = y)
+
+y <- test_edx$rating
+x <- data.matrix(test_edx[,!("rating")])
+d_test <- xgb.DMatrix(data = x, label = y)
+
+```
+
+```{r include = FALSE}
+y <- NULL
+x <- NULL
+gc()
+```
+
+```{r, echo=TRUE}
+
+watchlist <- list(train = d_train, eval = d_test)
+
+fit <- xgb.train(data=d_train, 
+                 nrounds = 5000, 
+                 verbose = FALSE,
+                 tree_method = 'hist',
+                 max_depth = 8,
+                 min_child_weight = 300,
+                 early_stopping_rounds = 20, 
+                 watchlist = watchlist,
+                 eval_metric = 'rmse')
+
+y <- test_edx$rating
+x <- data.matrix(test_edx[,!("rating")])
+
+yhat = predict(fit, x)
+RMSE_model_IV <- RMSE(y, yhat)
+```
+
+```{r table4, echo=FALSE}
+rmse_table <- rbind(rmse_table, data_frame(Method = "MAX TREE DEPTH = 8 AND CHILD WEIGHT = 300 - TEST", RMSE = RMSE_model_IV))
+rmse_table %>% knitr::kable(caption = "RMSEs")
+```
+
+THERE WAS AN IMPROVEMENT IN THESE MODEL CHANGING THE CHILD WEIGHT.  THEN, FOR THE REST OF THE MODELS I'M KEEPING THE CHILD WEIGHT = 300 AS THE MOST OPTIMAL.
+
+## MODEL 5 - MAX TREE DEPTH = 8, ETA = 0.1 AND MIN CHILD = 300
+FOR THIS MODEL I'M CHANGING THE ETA FROM THE DEFAULT 0.3 TO 0.1.  WILLING AN IMPROVEMENT IN THE RMSE.
+
+* max_depth = 8 
+* eta = 0.1
+* min_child_weight = 300
+
+```{r, echo=TRUE}
+
+set.seed(1, sample.kind="Rounding")
+
+y <- train_edx$rating
+x <- data.matrix(train_edx[,!("rating")])
+d_train <- xgb.DMatrix(data = x, label = y)
+
+y <- test_edx$rating
+x <- data.matrix(test_edx[,!("rating")])
+d_test <- xgb.DMatrix(data = x, label = y)
+```
+
+```{r include = FALSE}
+y <- NULL
+x <- NULL
+gc()
+```
+
+```{r, echo=TRUE}
+
+watchlist <- list(train = d_train, eval = d_test)
+
+fit <- xgb.train(data=d_train, 
+                 nrounds = 5000, 
+                 verbose = FALSE, 
+                 tree_method = 'hist',
+                 max_depth = 8,
+                 min_child_weight = 300,
+                 eta = 0.1,
+                 early_stopping_rounds = 20,  
+                 watchlist = watchlist,
+                 eval_metric = 'rmse')
+
+y <- test_edx$rating
+x <- data.matrix(test_edx[,!("rating")])
+
+yhat = predict(fit, x)
+RMSE_model_V <- RMSE(y, yhat)
+```
+
+```{r table5, echo=FALSE}
+rmse_table <- rbind(rmse_table, data_frame(Method = "MAX TREE DEPTH = 8, ETA = 0.1, MIN CHILD = 300  - TEST", RMSE = RMSE_model_V))
+rmse_table %>% knitr::kable(caption = "RMSEs")
+```
+
+BECAUSE THIS MODEL REACHED AN ACCEPTABLE RMSE IN TEST. I AM GOING TO USE THE VALIDATION DATASET TO PREDICT THE RATING THAT A USER WILL GIVE TO A MOVIE.
+
+```{r, echo=TRUE}
+## Validation Dataset
+y <- validation$rating
+x <- data.matrix(validation[,!("rating")])
+
+yhat = predict(fit, x)
+RMSE_model_VI <- RMSE(y, yhat)
+```
+
+```{r table6, echo=FALSE}
+rmse_table <- rbind(rmse_table, data_frame(Method = "MAX TREE DEPTH = 8 AND ETA = 0.1, MIN CHILD = 300 - VALIDATION", RMSE = RMSE_model_VI))
+rmse_table %>% knitr::kable(caption = "RMSEs")
+```
+
+THIS IS THE **FINAL MODEL** THAT REACHED AN **ACCEPTABLE RMSE IN VALIDATION DATASET** FOR THIS PROJECT.
+
+# RESULT
+* THE RMSE TABLE IS A RESULT OF EACH IMPROVEMENT, OR NOT, BETWEEN EACH MODEL.
+
+```{r RESULTS, echo=FALSE}
+rmse_table %>% knitr::kable(caption = "RESULTS")
+```
+* THE IMPORTANCE PLOT SHOWS US THE IMPORTANCE OF EACH FEATURE IN THE FINAL MODEL.  THE LONGER IS THE BAR, MORE IMPORTANT IS THE FEATURE.  FEATURES ARE CLASSIFIED BY IMPORTANCE AND CLUSTERED BY IMPORTANCE.
+
+```{r, echo=FALSE, fig.width = 5.5, fig.height = 4, fig.align = "center"}
+
+importance_matrix_model_VI <- xgb.importance(model = fit)
+xgb.plot.importance(importance_matrix = importance_matrix_model_VI)
+```
+
+# CONCLUSION
+
+THE DATA SCIENCE MOVIELENS PROJECT REQUESTS TO BUILD A MACHINE LEARNING ALGORITHM TO PREDICT THE USERS RATING FOR A MOVIE.
+
+THE MODEL HAS TO REACH AN ACCEPTABLE RMSE WITHOUT ANY OTHER LIMITATIONS OF HOW TO DO IT. 
+
+AFTER REVIEW AND UNDERSTAND THE EXAMPLES PROVIDED BY HARVARD I DECIDED TO KEEP INVESTIGATING OTHER MODELS, SUCH US MATRIX FACTORIZATION AND, THE ONE THAT CAPTURED MY ATTENTION, XGBOOST.
+
+THE LIMITATIONS THAT I HAD WERE THE HARDWARE AND THIS BROUGHT ME ANOTHER ONE "THE TIME". RUNNING EACH MODEL ON MY COMPUTER HAS TAKEN AT LEAST A DAY!
+
+AS FUTURES IMPROVEMENTS, I WOULD WORK WITH SOME OF THE REGULARIZATION PARAMETERS SUCH AS LAMBDA, GAMMA, ALPHA AND, OTHER ADVANCED PARAMETERS TO TWEAK THE MODEL AND IMPROVE ITS RESULTS.
+ALSO, CHANGING ETA TO SMALLER VALUES LIKE 0.01 OR 0.001 WOULD HELP CONVERGE TO A BETTER RMSE BUT IT WILL TAKE MORE ROUNDS TO FIND THE BEST RSME.
+
+IN MY RECOMMENDER SYSTEM, THE DEFAULT VALUES USED FOR THE REGULARIZATION PARAMETERS ARE:
+
+* LAMBDA -> DEFAULT = 0. 
+* ALPHA -> DEFAULT = 0. 
+* GAMMA -> DEFAULT = 0.
+  
+# REFERENCES
+
+* GENERAL INFORMATION
+  + <https://rafalab.github.io/dsbook/index.html> 
+
+* GENERAL INFORMATION IN R
+  + <https://cran.r-project.org/>
+
+* MACHINE LEARNING ALGORITHMS
+  + <https://www.analyticsvidhya.com/blog/2017/09/common-machine-learning-algorithms/>
+
+* FEATURE ENGINEERING
+  + <https://towardsdatascience.com/feature-engineering-for-machine-learning-3a5e293a5114>
+
+* MATRIX FACTORIZATION
+  + <https://www.youtube.com/watch?v=ZspR5PZemcs>
+
+* XGBOOST
+  + <https://xgboost.readthedocs.io/en/latest/>
+  + <https://towardsdatascience.com/>
+  + <https://www.kdnuggets.com/2017/10/XGBOOST-CONCISE-TECHNICAL-OVERVIEW.HTML>
+  + <https://machinelearningmastery.com/gentle-introduction-xgboost-applied-machine-learning/>
